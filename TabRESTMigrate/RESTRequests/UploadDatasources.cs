@@ -3,6 +3,7 @@ using System.Xml;
 using System.Collections.Generic;
 using System.Text;
 using System.IO;
+using System.IO.Compression;
 
 /// <summary>
 /// Uploads all the Data Sources in a directory tree
@@ -32,6 +33,7 @@ class UploadDatasources : TableauServerSignedInRequestBase
     /// List of users in the site (used for looking up user-ids, based on the user names and mapping ownership)
     /// </summary>
     private readonly IEnumerable<SiteUser> _siteUsers;
+    private Configuration DBconfigration;
 
 
     /// <summary>
@@ -50,7 +52,7 @@ class UploadDatasources : TableauServerSignedInRequestBase
         bool attemptOwnershipAssignment,
         IEnumerable<SiteUser> siteUsers,
         int uploadChunkSizeBytes = TableauServerUrls.UploadFileChunkSize,
-        int uploadChunkDelaySeconds = 0)
+        int uploadChunkDelaySeconds = 0, Configuration DBconfigration=null)
         : base(login)
     {
         System.Diagnostics.Debug.Assert(uploadChunkSizeBytes > 0, "Chunck size must be positive");
@@ -60,6 +62,7 @@ class UploadDatasources : TableauServerSignedInRequestBase
         _uploadProjectBehavior = uploadProjectBehavior;
         _credentialManager = credentialManager;
         _manualActions = manualActions;
+        this.DBconfigration = DBconfigration;
         if(_manualActions == null)
         {
             _manualActions = new CustomerManualActionManager();
@@ -144,13 +147,29 @@ class UploadDatasources : TableauServerSignedInRequestBase
                     var dbCredentialsIfAny = helper_DetermineContentCredential(
                         Path.GetFileName(thisFilePath),
                         projectName);
-
+                   
+                    if (DBconfigration != null)
+                    {
+                        try
+                        {
+                            dbCredentialsIfAny = new CredentialManager.Credential(DBconfigration.Username, DBconfigration.password, true);
+                            updateFileAndZip(thisFilePath);
+                           
+                        }
+                        catch(Exception e)
+                        {
+                            StatusLog.AddError("Error updating datasource " + thisFilePath + ". " + e.Message);
+                        }
+                       
+                    }
                     //See what content specific settings there may be for this workbook
                     var publishSettings = DatasourcePublishSettings.GetSettingsForSavedDatasource(thisFilePath);
 
                     //Do the file upload
                     bool wasFileUploaded = AttemptUploadSingleFile(thisFilePath, projectIdForUploads, dbCredentialsIfAny, publishSettings);
-                    if (wasFileUploaded) { countSuccess++; }
+                    if (wasFileUploaded) { countSuccess++;
+
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -160,6 +179,7 @@ class UploadDatasources : TableauServerSignedInRequestBase
                 }
             }
         }
+
 
         //If we are running recursive , then look in the subdirectories too
         if (recurseDirectories)
@@ -175,6 +195,76 @@ class UploadDatasources : TableauServerSignedInRequestBase
         }
     }
 
+    private void AttemptToDeleteFilefromLocal(String filePath)
+    {
+        if (File.Exists(filePath))
+        {
+            File.Delete(filePath);
+            this.StatusLog.AddStatus("File " + filePath + " deleted from local directory",-10);
+        }
+    }
+
+
+    private void updateFileAndZip(string filePath)
+    {
+        var fileDownloadedNoPath = System.IO.Path.GetFileName(filePath);
+        var extractedFilePath = System.IO.Path.GetDirectoryName(filePath) + @"\Extracted\" + System.IO.Path.GetFileNameWithoutExtension(fileDownloadedNoPath);
+        ZipFile.ExtractToDirectory(filePath, extractedFilePath);
+        var filePathUrl = extractedFilePath + @"\" + System.IO.Path.GetFileNameWithoutExtension(fileDownloadedNoPath) + ".tds";
+        var sourceConfig = DBconfigration;
+        XmlDocument doc = new XmlDocument();
+        doc.Load(filePathUrl);
+        var locNode = doc.GetElementsByTagName("repository-location");
+        foreach (var kc in locNode)
+        {
+            var locationData = (XmlElement)kc;
+            if (locationData != null)
+            {
+                if (!string.IsNullOrEmpty(sourceConfig.Path))
+                {
+                    locationData.SetAttribute("path", sourceConfig.Path); // Set to new value.
+                    locationData.SetAttribute("derived-from", sourceConfig.Path + "?rev=" + locationData.GetAttribute("revision"));
+                }
+            }
+        }
+
+        var conNode = doc.GetElementsByTagName("connection");
+        foreach (var kd in conNode)
+        {
+            var dbConnectionData = (XmlElement)kd;
+            if (dbConnectionData.ParentNode.Name == "datasource" || dbConnectionData.ParentNode.Name == "named-connection")
+            {
+                if (System.IO.Path.GetExtension(dbConnectionData.GetAttribute("filename")) != ".csv" &&
+                    System.IO.Path.GetExtension(dbConnectionData.GetAttribute("filename")) != ".xlsx")
+                {
+                    if (!string.IsNullOrEmpty(sourceConfig.DbName))
+                    {
+                        dbConnectionData.SetAttribute("dbname", sourceConfig.DbName);
+                    }
+                    if (!string.IsNullOrEmpty(sourceConfig.Server))
+                    {
+                        dbConnectionData.SetAttribute("server", sourceConfig.Server);
+                    }
+                    if (!string.IsNullOrEmpty(sourceConfig.Username))
+                    {
+                        dbConnectionData.SetAttribute("username", sourceConfig.Username);
+                    }
+                }
+            }
+        }
+
+        doc.Save(filePathUrl);
+        string[] stringSeparators = new string[] { "\\Extracted\\" };
+        var directoryName = filePathUrl.Split(stringSeparators, StringSplitOptions.RemoveEmptyEntries);
+        var newZippedfilePath = directoryName[0] + @"\" + System.IO.Path.GetFileNameWithoutExtension(filePathUrl) + ".tdsx";
+        if (System.IO.File.Exists(newZippedfilePath))
+        {
+            System.IO.File.Delete(newZippedfilePath);
+        }
+        ZipFile.CreateFromDirectory(System.IO.Path.GetDirectoryName(filePathUrl), newZippedfilePath);
+        var dir = new DirectoryInfo(directoryName[0] + @"\Extracted");
+        dir.Delete(true);
+    }
     /// <summary>
     /// Log a required manual action
     /// </summary>
@@ -236,6 +326,8 @@ class UploadDatasources : TableauServerSignedInRequestBase
         DatasourcePublishSettings publishSettings)
     {
         string uploadSessionId;
+
+
         try
         {
             var fileUploader = new UploadFile(_onlineUrls, _onlineSession, localFilePath, _uploadChunkSizeBytes, _uploadChunkDelaySeconds);
@@ -251,6 +343,7 @@ class UploadDatasources : TableauServerSignedInRequestBase
         this.StatusLog.AddStatus("File chunks upload successful. Next step, make it a published datasource", -10);
         try
         {
+           
             string fileName = Path.GetFileNameWithoutExtension(localFilePath);
             string uploadType = RemoveFileExtensionDot(Path.GetExtension(localFilePath).ToLower());
             dataSource = FinalizePublish(
@@ -259,6 +352,7 @@ class UploadDatasources : TableauServerSignedInRequestBase
                 uploadType, 
                 projectId, 
                 dbCredentials);
+            //updateDataSourceConnection(dataSource.Name, configration);
             StatusLog.AddStatus("Upload content details: " + dataSource.ToString(), -10);
             StatusLog.AddStatus("Success! Uploaded datasource " + Path.GetFileName(localFilePath));
         }
@@ -319,18 +413,19 @@ class UploadDatasources : TableauServerSignedInRequestBase
             xmlWriter.WriteStartElement("datasource");
             xmlWriter.WriteAttributeString("name", publishedContentName);
 
-                //If we have an associated database credential, write it out
-                if (dbCredentials != null)
-                {
-                    CredentialXmlHelper.WriteCredential(
-                        xmlWriter,
-                        dbCredentials);
-                }
-
-                xmlWriter.WriteStartElement("project"); //<project>
+        //If we have an associated database credential, write it out
+         if (dbCredentials != null)
+         {
+             CredentialXmlHelper.WriteCredential(
+                 xmlWriter,
+                 dbCredentials);
+         }
+       
+        xmlWriter.WriteStartElement("project"); //<project>
                 xmlWriter.WriteAttributeString("id", projectId);
                 xmlWriter.WriteEndElement();            //</project>
-            xmlWriter.WriteEndElement(); // </datasource>
+                
+        xmlWriter.WriteEndElement(); // </datasource>
             //Currently not supporting <connectionCredentials>
         xmlWriter.WriteEndElement(); // </tsRequest>
         xmlWriter.Close();
@@ -339,14 +434,17 @@ class UploadDatasources : TableauServerSignedInRequestBase
 
         //Generate the MIME message
         var mimeGenerator = new MimeWriterXml(xmlText);
-
+        
         //Create a web request to push the 
         var urlFinalizeUpload = _onlineUrls.Url_FinalizeDataSourcePublish(_onlineSession, uploadSessionId, publishedContentType);
-
+       
         //NOTE: The publish finalization step can take several minutes, because server needs to unpack the uploaded ZIP and file it away.
         //      For this reason, we pass in a long timeout
-        var webRequest = this.CreateAndSendMimeLoggedInRequest(urlFinalizeUpload, "POST", mimeGenerator, TableauServerWebClient.DefaultLongRequestTimeOutMs); 
+        var webRequest = this.CreateAndSendMimeLoggedInRequest(urlFinalizeUpload, "POST", mimeGenerator, TableauServerWebClient.DefaultLongRequestTimeOutMs);
+       
         var response = GetWebReponseLogErrors(webRequest, "finalize datasource publish");
+       // var dataSourceId = findDataSourceIdByName(publishedContentName);
+
         using (response)
         {
             var xmlDoc = GetWebResponseAsXml(response);
@@ -365,8 +463,170 @@ class UploadDatasources : TableauServerSignedInRequestBase
                 return null;
             }
         }
+        
+       
+    }
+    private void updateDataSourceConnection(string dataSourcname, Configuration configration)
+    {
+        SiteDatasource siteDataSource = findDataSourceWithConnections(dataSourcname);
+        updateDataSourceConnection(siteDataSource, configration);
     }
 
+    private void updateDataSourceConnection(SiteDatasource dataSource,Configuration configration)
+    {
+        if (dataSource != null)
+        {
+            var dataSourceId = dataSource.Id;
+            var connections = dataSource.DataConnections;
+            foreach(SiteConnection connectionItem in connections)
+            {
+                var connectionId = connectionItem.Id;
+                UpdateInvidualDataSourceConnection(dataSourceId, connectionId, configration);
+            }
+        }
+            
+    }
+
+    private SiteConnection UpdateInvidualDataSourceConnection(string dataSourceId,string connectionId,Configuration configration)
+    {
+        var urlUpdateConnection = _onlineUrls.Url_UpdateDataSourceConnection(_onlineSession, dataSourceId,connectionId);
+        var sb = new StringBuilder();
+        var xmlWriter = XmlWriter.Create(sb, XmlHelper.XmlSettingsForWebRequests);
+        xmlWriter.WriteStartElement("tsRequest");
+        xmlWriter.WriteStartElement("connection");
+        xmlWriter.WriteAttributeString("serverAddress", configration.Server);
+        xmlWriter.WriteAttributeString("serverPort", "5439");
+
+        xmlWriter.WriteAttributeString("userName", configration.Username);
+        xmlWriter.WriteAttributeString("password", configration.password);
+        XmlHelper.WriteBooleanAttribute(xmlWriter, "embedPassword", true);
+        xmlWriter.WriteEndElement(); // </datasource>
+                                     //Currently not supporting <connectionCredentials>
+        xmlWriter.WriteEndElement(); // </tsRequest>
+        xmlWriter.Close();
+
+        var xmlText = sb.ToString(); //Get the XML text out
+
+        //Generate the MIME message
+        var mimeGenerator = new MimeWriterXml(xmlText);
+        var webRequest = this.CreateAndSendMimeLoggedInRequest(urlUpdateConnection, "PUT", mimeGenerator);
+        //var response = GetWebReponseLogErrors(webRequest, "update datasource connection");
+        var response= webRequest.GetResponse();
+
+        using (response)
+        {
+            var xmlDoc = GetWebResponseAsXml(response);
+
+            //Get all the datasource node from the response
+            var nsManager = XmlHelper.CreateTableauXmlNamespaceManager("iwsOnline");
+            var dataSourceXml = xmlDoc.SelectSingleNode("//iwsOnline:datasource", nsManager);
+
+            try
+            {
+                return new SiteConnection(dataSourceXml);
+            }
+            catch (Exception parseXml)
+            {
+                StatusLog.AddError("Data source upload, error parsing XML response " + parseXml.Message + "\r\n" + dataSourceXml.InnerXml);
+                return null;
+            }
+        }
+    }
+
+
+    private SiteDatasource findDataSourceWithConnections(string dataSourceName)
+    {
+        SiteDatasource siteDataSource = findDataSourceIdByName(dataSourceName);
+
+        if (siteDataSource != null)
+        {
+            var connectionList = findDataSourceConnections(siteDataSource.Id);
+            IEditDataConnectionsSet dataSource = siteDataSource;
+            dataSource.SetDataConnections(connectionList);
+        }
+        return siteDataSource;
+    }
+
+    private List<SiteConnection> findDataSourceConnections(string dataSourceId)
+    {
+        var urlListConnections = _onlineUrls.Url_ListConnectionsForDatasource(_onlineSession, dataSourceId);
+        var listConnectionRequest = this.CreateLoggedInWebRequest(urlListConnections, "GET");
+        var listConnectionResponse = GetWebReponseLogErrors(listConnectionRequest, "get datasource details");
+        List<SiteConnection> connectionList = new List<SiteConnection>();
+        using (listConnectionResponse)
+        {
+            var xmlDoc = GetWebResponseAsXml(listConnectionResponse);
+
+            //Get all the workbook nodes
+            var nsManager = XmlHelper.CreateTableauXmlNamespaceManager("iwsOnline");
+            var datasources = xmlDoc.SelectNodes("//iwsOnline:connection", nsManager);
+
+            //Get information for each of the data sources
+            foreach (XmlNode itemXml in datasources)
+            {
+                try
+                {
+                    var connection = new SiteConnection(itemXml);
+                    connectionList.Add(connection);
+                }
+                catch
+                {
+                    AppDiagnostics.Assert(false, "Datasource parse error");
+                    _onlineSession.StatusLog.AddError("Error parsing datasource: " + itemXml.InnerXml);
+                }
+            }
+
+
+
+        }
+
+
+        return connectionList;
+    }
+
+    private SiteDatasource findDataSourceIdByName(string dataSourceName)
+    {
+        var filterExpression = getFilterExpression("name", dataSourceName, "eq");
+        var urlDataSourceDeatils = _onlineUrls.Url_DataSourceForFilter(_onlineSession, filterExpression);
+        var dataSourceWebRequest = this.CreateLoggedInWebRequest(urlDataSourceDeatils, "GET");
+        var dataSourceResponse = GetWebReponseLogErrors(dataSourceWebRequest, "get datasource details");
+        SiteDatasource siteDataSource = null;
+        using (dataSourceResponse)
+        {
+            var xmlDoc = GetWebResponseAsXml(dataSourceResponse);
+
+            //Get all the workbook nodes
+            var nsManager = XmlHelper.CreateTableauXmlNamespaceManager("iwsOnline");
+            var datasources = xmlDoc.SelectNodes("//iwsOnline:datasource", nsManager);
+
+            //Get information for each of the data sources
+            foreach (XmlNode itemXml in datasources)
+            {
+                try
+                {
+                    siteDataSource = new SiteDatasource(itemXml);
+                    break;
+                }
+                catch
+                {
+                    AppDiagnostics.Assert(false, "Datasource parse error");
+                    _onlineSession.StatusLog.AddError("Error parsing datasource: " + itemXml.InnerXml);
+                }
+            }
+
+
+
+        }
+      
+        
+        return siteDataSource;
+           
+    }
+
+    private string getFilterExpression(string key,string value , string equation)
+    {
+        return key + ":" + equation + ":" + value;
+    }
     /// <summary>
     /// Looks to see if there are database associated credentils that should be associated with the
     /// content being uploaded

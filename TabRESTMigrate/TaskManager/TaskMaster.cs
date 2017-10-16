@@ -19,7 +19,7 @@ internal partial class TaskMaster
     private string _pathGeneratedSiteInventoryReportCsv; //If non-null, it indicates we have generated a site inventory report
     private string _pathGeneratedSiteInventoryReportTwb; //If non-null, it indicates we have generated a site inventory report
     private string _pathGeneratedManualStepsReport; //If non-null, it indicates we have generated a report
-
+    public SitesCredentials siteCredentials { get; set; }
     /// <summary>
     /// If there was a task to produce a site inventory report, this property will contain the path to that report
     /// </summary>
@@ -31,6 +31,13 @@ internal partial class TaskMaster
         }
     }
 
+    public TableauServerUrls TableauServerUrls
+    {
+        get
+        {
+            return _onlineUrls;
+        }
+    }
     /// <summary>
     /// If there was a task to produce a site inventory report, this property will contain the path to that report
     /// </summary>
@@ -185,6 +192,8 @@ internal partial class TaskMaster
     }
 
     bool _isDone = false;
+    bool _isDataSorceDownLoadDone = false;
+    bool _isWorkBookDownloadDone = false;
     KeepAliveBackgroundTaskBase _asyncKeepAliveBackgroundTasks = null;
 
     public readonly string JobName;
@@ -1505,7 +1514,11 @@ internal partial class TaskMaster
             _taskOptions.IsOptionSet(TaskMasterOptions.Option_UploadCreateNeededProjects), 
             true);
 
-
+        Configuration configrationObject = null;
+        if (siteCredentials != null)
+        {
+            configrationObject = siteCredentials.configuration;
+        }
         var dsUploader = new UploadDatasources(
             _onlineUrls, 
             onlineLogin,
@@ -1516,7 +1529,7 @@ internal partial class TaskMaster
             attemptContentOwnershipAssignment,
             siteUsers,
             this.UploadChunksSizeBytes,
-            this.UploadChunksDelaySeconds);
+            this.UploadChunksDelaySeconds, configrationObject);
         try
         {
             dsUploader.ExecuteRequest();

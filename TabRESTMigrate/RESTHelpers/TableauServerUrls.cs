@@ -55,6 +55,9 @@ class TableauServerUrls : ITableauServerSiteInfo
     private readonly string _urlDeleteDatasourceTagTemplate;
     private readonly string _urlUpdateWorkbookTemplate;
     private readonly string _urlUpdateDatasourceTemplate;
+    private readonly string _urlListConnectionsForDatasourceTemplate;
+    private readonly string _urlDataSourceForFilterTemplate;
+    private readonly string _urlUpdateDataSourceConnectionTemplate;
 
     /// <summary>
     /// Server url with protocol
@@ -114,6 +117,11 @@ class TableauServerUrls : ITableauServerSiteInfo
         this._urlDeleteDatasourceTagTemplate       = serverNameWithProtocol + "/api/2.3/sites/{{iwsSiteId}}/datasources/{{iwsDatasourceId}}/tags/{{iwsTagText}}";
         this._urlUpdateWorkbookTemplate            = serverNameWithProtocol + "/api/2.3/sites/{{iwsSiteId}}/workbooks/{{iwsWorkbookId}}";
         this._urlUpdateDatasourceTemplate          = serverNameWithProtocol + "/api/2.3/sites/{{iwsSiteId}}/datasources/{{iwsDatasourceId}}";
+        this._urlListConnectionsForDatasourceTemplate      = serverNameWithProtocol + "/api/2.4/sites/{{iwsSiteId}}/datasources/{{iwDataSourceId}}/connections";//Get
+        this._urlDataSourceForFilterTemplate       = serverNameWithProtocol + "/api/2.4/sites/{{iwsSiteId}}/datasources?filter={{iwfilterExpression}}";//Get
+        this._urlUpdateDataSourceConnectionTemplate       = serverNameWithProtocol + "/api/2.4/sites/{{iwsSiteId}}/datasources/{{iwDataSourceId}}/connections/{{iwConnectionId}}";//PUT
+
+
         //Any server version specific things we want to do?
         switch (serverVersion)
         {
@@ -577,6 +585,61 @@ class TableauServerUrls : ITableauServerSiteInfo
     }
 
 
+    /// <summary>
+    /// URL to get  datasource details
+    /// </summary>
+    /// <param name="logInInfo"></param>
+    /// <param name="filterExpression"></param>
+   
+    /// <returns></returns>
+    public string Url_DataSourceForFilter(TableauServerSignIn logInInfo, string filterExpression)
+    {
+
+        string workingText = _urlDataSourceForFilterTemplate.Replace("{{iwsSiteId}}", logInInfo.SiteId);
+        workingText = workingText.Replace("{{iwfilterExpression}}", filterExpression);
+        
+        ValidateTemplateReplaceComplete(workingText);
+
+        return workingText;
+    }
+
+
+
+    /// <summary>
+    /// URL to get  datasource details
+    /// </summary>
+    /// <param name="logInInfo"></param>
+    /// <param name="dataSourceId"></param>
+    /// <param name="connectionId"></param>
+
+    /// <returns></returns>
+    public string Url_UpdateDataSourceConnection(TableauServerSignIn logInInfo, string dataSourceId,string connectionId)
+    {
+
+        string workingText = _urlUpdateDataSourceConnectionTemplate.Replace("{{iwsSiteId}}", logInInfo.SiteId);
+        workingText = workingText.Replace("{{iwDataSourceId}}", dataSourceId);
+        workingText = workingText.Replace("{{iwConnectionId}}", connectionId);
+        ValidateTemplateReplaceComplete(workingText);
+
+        return workingText;
+    }
+    /// <summary>
+    /// URL to get  datasource details
+    /// </summary>
+    /// <param name="logInInfo"></param>
+    /// <param name="dataSourceId"></param>
+
+    /// <returns></returns>
+    public string Url_ListConnectionsForDatasource(TableauServerSignIn logInInfo, string dataSourceId)
+    {
+
+        string workingText = _urlListConnectionsForDatasourceTemplate.Replace("{{iwsSiteId}}", logInInfo.SiteId);
+        workingText = workingText.Replace("{{iwDataSourceId}}", dataSourceId);
+
+        ValidateTemplateReplaceComplete(workingText);
+
+        return workingText;
+    }
     /// <summary>
     /// 
     /// </summary>

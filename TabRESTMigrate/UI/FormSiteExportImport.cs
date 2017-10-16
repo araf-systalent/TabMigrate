@@ -5,6 +5,11 @@ using System.Drawing;
 using System.Text;
 using System.Windows.Forms;
 using System.IO;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
+using System.Linq;
+using System.Threading;
+using System.Timers;
 
 namespace OnlineContentDownloader
 {
@@ -16,13 +21,15 @@ namespace OnlineContentDownloader
         /// If not NULL, indicates that we have command line parameters passed in that we want to run
         /// </summary>
         CommandLineParser _startupCommandLine;
-
+        private Thread _tread;
         /// <summary>
         /// The running Online Downloader task
         /// </summary>
         TaskMaster _onlineTaskMaster;
-
-
+        List<TaskMaster> _onlineTaskMasterList;
+        MultiTaskMaster _onlineMultiTaskMaster;
+        System.Timers.Timer updateMultiExportImportTakUpdate;
+        bool isMultiImport = false;
         public FormSiteExportImport()
         {
             InitializeComponent();
@@ -422,6 +429,10 @@ namespace OnlineContentDownloader
         /// <param name="e"></param>
         private void timer1_Tick(object sender, EventArgs e)
         {
+            if (!isMultiImport)
+            {
+
+            
             var taskMaster = _onlineTaskMaster;
             //Nothing to do... go to sleep
             if (taskMaster == null)
@@ -463,6 +474,60 @@ namespace OnlineContentDownloader
             ScrollToEndOfTextbox(textBoxStatus);
 
             textBoxErrors.Text = taskMaster.StatusLog.ErrorText;
+            }
+            else
+            {
+                multiImportTimerTick();
+            }
+        }
+
+        private void multiImportTimerTick()
+        {
+            var taskMaster = _onlineMultiTaskMaster;
+            //Nothing to do... go to sleep
+            if (taskMaster == null)
+            {
+                timer1.Enabled = false;
+                btnAbortRun.Visible = false;
+                return;
+            }
+
+            //-------------------------------------------------------------
+            if (taskMaster.isDone)
+            {
+                //Stop the timer...
+                timer1.Enabled = false;
+                btnAbortRun.Visible = false;
+                isMultiImport = false;
+                _onlineTaskMaster = null;
+                btnStartExecution.Enabled = true;
+                //Tell the process to exit?
+                if (this.ExitWhenDoneRunningTask)
+                {
+                    ExitApplication();
+                }
+                else if (this.AllowUserInterruptions) //Show reports?
+                {
+                    //Show error reports and other results
+                    AsyncTaskDone_Reporting(taskMaster);
+                }
+
+                return;
+            }
+            //Update normal status
+            //Get the status from the backtround task
+
+            string statusText = "";
+            string errorStatus = "";
+            taskMaster.getMultTaskFullStatus(out statusText, out errorStatus);
+            //string statusTextRuning = taskMaster.StatusLog.StatusText;
+            string statusTextRuning = DateTime.Now.ToString() + ": Running...\r\nsteps \r\n" + statusText;
+            //Scroll to bottom
+            textBoxStatus.Text = statusTextRuning;
+            ScrollToEndOfTextbox(textBoxStatus);
+
+            textBoxErrors.Text = errorStatus;
+
         }
 
         /// <summary>
@@ -529,6 +594,54 @@ namespace OnlineContentDownloader
                     AttemptToShellFile(Path.Combine(exportDirectory, "."));
                 }
             }
+        }
+
+
+        /// <summary>
+        /// Called after we have detected that the sync task has completed
+        /// </summary>
+        /// <param name="taskMaster"></param>
+        void AsyncTaskDone_Reporting(MultiTaskMaster taskMaster)
+        {
+            //Get the status from the backtround task
+            string statusText = "";
+            string errorStatus = "";
+            taskMaster.getMultTaskFullStatus(out statusText, out errorStatus);
+            
+
+          /*  //If there is a manual steps file, shell it
+            var manualStepsFile = taskMaster.PathToManualStepsReport;
+            if (!string.IsNullOrWhiteSpace(manualStepsFile))
+            {
+                AttemptToShellFile(manualStepsFile);
+            }
+
+            //If the job was to take a site inventory,show the report
+            if (taskMaster.JobName == TaskMaster.JobName_SiteInventory)
+            {
+                //First, see if we have a generated *.twb file
+                string inventoryFile = taskMaster.PathToSiteInventoryReportTwb;
+                //Second, if we don't have a *.twb file, see if we have a *.csv file of the raw data
+                if (string.IsNullOrWhiteSpace(inventoryFile))
+                {
+                    inventoryFile = taskMaster.PathToSiteInventoryReportCsv;
+                }
+
+                //If we have either file, shell it    
+                if (!string.IsNullOrWhiteSpace(inventoryFile))
+                {
+                    AttemptToShellFile(inventoryFile);
+                }
+            }
+            else if (taskMaster.JobName == TaskMaster.JobName_SiteExport)
+            {
+                //We want to shell the file explorer to show the path we have just exported to
+                string exportDirectory = taskMaster.PathToExportTo;
+                if (!string.IsNullOrWhiteSpace(exportDirectory))
+                {
+                    AttemptToShellFile(Path.Combine(exportDirectory, "."));
+                }
+            }*/
         }
 
         /// <summary>
@@ -647,7 +760,8 @@ namespace OnlineContentDownloader
             HidePanelIfNotMatch(panelImportSite, panelShowMe);
             HidePanelIfNotMatch(panelInventorySite, panelShowMe);
             HidePanelIfNotMatch(panelRunCommandLine, panelShowMe);
-
+            HidePanelIfNotMatch(panelMultiImportSites, panelShowMe);
+            HidePanelIfNotMatch(panelExpotAndImport, panelShowMe);
             if (panelShowMe != null)
             {
                 //Position it
@@ -786,6 +900,9 @@ namespace OnlineContentDownloader
         private const string ListAction_Inventory = "Generate CSV file of site's inventory";
         private const string ListAction_ExportSite = "Export site contents to local directory";
         private const string ListAction_ImportSite = "Upload from file system into site";
+        private const string ListAction_ImportMultiSites = "Upload from file system into sites";
+        private const string ListAction_ExportSiteAndImportToSites = "Export site contents to different sites";
+
         private void PopulateChooseActionUI()
         {
             var items = comboBoxChooseAction.Items;
@@ -794,6 +911,8 @@ namespace OnlineContentDownloader
             items.Add(ListAction_Inventory);
             items.Add(ListAction_ExportSite);
             items.Add(ListAction_ImportSite);
+            items.Add(ListAction_ImportMultiSites);
+            items.Add(ListAction_ExportSiteAndImportToSites);
 
             comboBoxChooseAction.SelectedIndex = 0;
         }
@@ -818,6 +937,7 @@ namespace OnlineContentDownloader
 
         private void comboBoxChooseAction_SelectedIndexChanged(object sender, EventArgs e)
         {
+            
             string selectedAction = comboBoxChooseAction.Text;
             if(selectedAction == ListAction_Inventory)
             {
@@ -833,6 +953,16 @@ namespace OnlineContentDownloader
             {
                 panelImportSite.Height = txtSiteImportCommandLineExample.Bottom + 10;
                 ShowSinglePanelHideOthers(panelImportSite);
+            }
+            else if (selectedAction == ListAction_ImportMultiSites)
+            {
+                panelMultiImportSites.Height = txtSiteImportCommandLineExample.Bottom + 10;
+                ShowSinglePanelHideOthers(panelMultiImportSites);
+            }
+            else if (selectedAction == ListAction_ExportSiteAndImportToSites)
+            {
+                panelMultiImportSites.Height = txtCommandForExportfromtoMultiple.Bottom + 10;
+                ShowSinglePanelHideOthers(panelExpotAndImport);
             }
             else
             {
@@ -877,20 +1007,553 @@ namespace OnlineContentDownloader
         /// <param name="e"></param>
         private void btnLinkImportCommandLine_LinkClicked(object sender, LinkLabelLinkClickedEventArgs e)
         {
-            try
-            {
-                //Create the task but don't set it running
-                var asyncTask = CreateAsyncImportTask(true);
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show("Error conifiguring import:" + ex.Message, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
+           
         }
 
         private void chkImportRemapContentOwnership_CheckedChanged(object sender, EventArgs e)
         {
 
+        }
+
+        private void label23_Click(object sender, EventArgs e)
+        {
+
+        }
+
+        private void btnPublishToSites_Click(object sender, EventArgs e)
+        {
+            _onlineTaskMaster = null;
+            _onlineTaskMasterList = null;
+            isMultiImport = true;
+            try
+            {
+                var asyncTask = CreateAsyncImportTaskForMultipleSites(false);
+                if (asyncTask != null)
+                {
+                    _onlineTaskMaster = asyncTask;
+                    //Start the work running
+                    StartRunningAsyncTask();
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Error conifiguring export:" + ex.Message, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            
+        }
+
+        public static  List<JToken>  getCreantialsObject(String pathCredentials)
+        {
+            using (StreamReader file = File.OpenText(pathCredentials))
+            using (JsonTextReader reader = new JsonTextReader(file))
+            {
+                var credentialItems = JToken.ReadFrom(reader).ToList();
+                return credentialItems;
+            }
+        }
+
+        /// <summary>
+        /// Creates the task we use to export a Tableau Server sites content to the local file system
+        /// </summary>
+        /// <returns></returns>
+        private TaskMaster CreateAsyncImportTaskForMultipleSites(bool showPasswordInUi)
+        {
+            /* string siteUrl = txtMultiImportSiteUrl1.Text;
+             string signInUser = txtMultiImportUserName.Text;
+             string signInPassword = txtMultiImportPassword.Text;
+             bool isSiteAdmin = chbisMultiImportUserAdmin.Checked;
+             string localPathImportFrom = txtMultiImportLocalPath.Text;
+             bool remapContentOwnership = chbIsMultiImportRemapDataServer.Checked;
+
+             //Check that this contains Workbooks or Data Sources; otherwise it's not a valid path with content
+             if (!TaskMaster.IsValidImportFromDirectory(localPathImportFrom))
+             {
+                 throw new Exception("The import directory specified does not contain datasources/workbooks sub directories. Import aborted.");
+             }
+
+             //If there is a DB credentials file path make sure it actually points to a file
+             string pathDBCredentials = GetDBCredentialsImportPath();
+             if (!string.IsNullOrWhiteSpace(pathDBCredentials))
+             {
+                 if (!File.Exists(pathDBCredentials))
+                 {
+                     throw new Exception("The path to the db credentials file does not exist, " + pathDBCredentials);
+                 }
+             }
+             List<JToken> credentialTokens = getCreantialsObject(pathDBCredentials);
+             List<SitesCredentials> credentialsList = new List<SitesCredentials>();
+             List<string> siteNameList = new List<string>();
+             foreach(JToken credentialToken in credentialTokens)
+             {
+                 var dbconfigration = credentialToken["data_source"].ToObject<Configuration>();
+                 var credentialsObject = credentialToken.ToObject<SitesCredentials>();
+                 credentialsObject.configuration = dbconfigration;
+                 credentialsList.Add(credentialsObject);
+                 siteNameList.Add(credentialsObject.sitname);
+             }
+
+             //----------------------------------------------------------------------
+             //Sanity test the sign in.  If this fails, then there is no point in 
+             //moving forward
+             //----------------------------------------------------------------------
+             bool signInTest = ValidateSignInPossible(siteUrl, signInUser, signInPassword);
+             if (!signInTest)
+             {
+                 return null;
+             }
+
+             var onlineUrls = TableauServerUrls.FromContentUrl(siteUrl,siteNameList, TaskMasterOptions.RestApiReponsePageSizeDefault);
+
+             //Local path
+             string localPathForSiteOutput = GeneratePathFromSiteUrl(onlineUrls);
+
+             //Output file
+             var nowTime = DateTime.Now;
+             string localPathForOutputFile =
+                 Path.Combine(localPathForSiteOutput,
+                              FileIOHelper.FilenameWithDateTimeUnique("siteImport.csv", nowTime));
+
+             //Log file
+             string localPathForLogFile =
+                 Path.Combine(localPathForSiteOutput,
+                              FileIOHelper.FilenameWithDateTimeUnique("siteImport_log.txt", nowTime));
+
+             //Errors file
+             string localPathForErrorsFile =
+                 Path.Combine(localPathForSiteOutput,
+                              FileIOHelper.FilenameWithDateTimeUnique("siteImport_errors.txt", nowTime));
+
+             //Manual steps file
+             string localPathForManualStepsFile =
+                 Path.Combine(localPathForSiteOutput,
+                              FileIOHelper.FilenameWithDateTimeUnique("siteImport_manualSteps.csv", nowTime));
+
+
+             //-----------------------------------------------------------------
+             //Generate a command line
+             //-----------------------------------------------------------------
+             string commandLineAsText;
+             CommandLineParser commandLineParsed;
+
+             CommandLineParser.GenerateCommandLine_MultiImportSiteImport(
+                  showPasswordInUi,
+                  localPathImportFrom,
+                  siteUrl,
+                  signInUser,
+                  signInPassword,
+                  isSiteAdmin,
+                  chkRemapWorkbookDataserverReferences.Checked,
+                  localPathForLogFile,
+                  localPathForErrorsFile,
+                  localPathForManualStepsFile,
+                  remapContentOwnership,
+                  chkVerboseLog.Checked,
+                  pathDBCredentials,
+                  out commandLineAsText,
+                  out commandLineParsed);
+
+             //Show the user the command line, so that they can copy/paste and run it
+             txtSiteImportCommandLineExample.Text = PathHelper.GetApplicaitonPath() + " " + commandLineAsText;
+             siteUrl = txtMultiImportSiteUrl2.Text;
+             //=====================================================================
+             //Create the task
+             //=====================================================================
+             /*List<TaskMaster> taskMasterList = new List<TaskMaster>();
+             taskMasterList.Add(TaskMaster.FromCommandLine(commandLineParsed));
+             CommandLineParser.GenerateCommandLine_SiteImport(
+                  showPasswordInUi,
+                  localPathImportFrom+"1",
+                  siteUrl,
+                  signInUser,
+                  signInPassword,
+                  isSiteAdmin,
+                  chkRemapWorkbookDataserverReferences.Checked,
+                  pathDBCredentials,
+                  localPathForLogFile,
+                  localPathForErrorsFile,
+                  localPathForManualStepsFile,
+                  remapContentOwnership,
+                  chkVerboseLog.Checked,
+                  out commandLineAsText,
+                  out commandLineParsed);
+             taskMasterList.Add(TaskMaster.FromCommandLine(commandLineParsed));*/
+            //return TaskMaster.FromCommandLine(commandLineParsed);*/
+            return null;
+        }
+        private void StartRunningMultipleAsyncTask()
+        {
+            var taskList = _onlineTaskMasterList;
+            if (taskList == null || taskList.Count==0)
+            {
+                AppDiagnostics.Assert(false, "No task to run");
+                return;
+            }
+            
+
+
+             taskList[0].ExecuteTaskBegin();
+            if (taskList.Count > 1)
+            {
+                taskList[1].ExecuteTaskBegin();
+            }
+            textBoxStatus.Text = "Started...";
+            textBoxErrors.Text = "";
+            btnAbortRun.Visible = true;
+            timer1.Enabled = true;
+        }
+
+        private void btnStartExecution_Click(object sender, EventArgs e)
+        {
+            try
+            {
+
+                var car = CreateAsyncExportTaskThenImport(false);
+                _onlineMultiTaskMaster = car;
+                isMultiImport = true;
+                btnAbortRun.Visible = true;
+                timer1.Enabled = true;
+                btnStartExecution.Enabled = false;
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Error conifiguring import:" + ex.Message, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                btnStartExecution.Enabled = true;
+            }
+        }
+        private void multitaskLogUpdate(Object source, ElapsedEventArgs e)
+        {
+
+        }
+
+
+        private void doTask()
+        {
+        }
+       private MultiTaskMaster CreateAsyncExportTaskThenImport(bool showPasswordInUi)
+        {
+            string siteUrl = txtExportFromUrl.Text;
+            string signInUser = txtFromSiteUserName.Text;
+            string signInPassword = txtFromSitePassword.Text;
+            bool isSiteAdmin = chkIsAdminUser.Checked;
+            string exportOnlySingleProject = txtExportProjectName.Text.Trim();
+            string exportOnlyWithTag = txtExportTagName.Text.Trim();
+            string importSitesCredentialsJSONPath = txtImportSitesJsonFilePath.Text;
+            bool remapContentOwnership = true;
+            string exportTargetPath;
+             TaskMaster exportTaskMaster = CreateAsyncExportTaskForMultiple(siteUrl, signInUser, 
+                 signInPassword, 
+                 isSiteAdmin, 
+                 exportOnlySingleProject, 
+                 exportOnlyWithTag,
+                 showPasswordInUi,
+                 out exportTargetPath);
+             if (exportTaskMaster == null)
+             {
+                 return null;
+             }
+             MultiTaskMaster multiTaskMaster = new MultiTaskMaster(exportTaskMaster);
+             multiTaskMaster.startExicution();
+             var exportTargetPathBase = GeneratePathFromSiteUrl(exportTaskMaster.TableauServerUrls);
+          
+            multiTaskMaster.exportTargetPathBase = exportTargetPathBase;
+            multiTaskMaster.exportTargetPath = exportTargetPath;
+            List<String> importSiteNames;
+            List<SitesCredentials> sitesCredentials;
+            readImportSiteCredentialsFromFile(importSitesCredentialsJSONPath,
+                out sitesCredentials,
+                out importSiteNames);
+            multiTaskMaster.sitesCredentials = sitesCredentials;
+           // multiTaskMaster.site
+            multiTaskMaster.formSiteExportImport = this;
+            multiTaskMaster.remapContentOwnership = remapContentOwnership;
+            multiTaskMaster.isSiteAdmin = isSiteAdmin;
+
+           // createImportTasks();
+           /* int i = 1;
+            foreach (SitesCredentials item in sitesCredentials)
+            {
+                i++;
+                var date = DateTime.Now;
+                string localPathToImport = FileIOHelper.PathDateTimeSubdirectory(exportTargetPathBase, true, "si" + i, date);
+                FileIOHelper.makeCopyToTarget(exportTargetPath, localPathToImport);
+                TaskMaster importTaskMAster;
+                createAsychImportTask(item, isSiteAdmin, localPathToImport, remapContentOwnership, false, out importTaskMAster);
+                multiTaskMaster.addoImportTaskMasterList(importTaskMAster);
+            }*/
+            return multiTaskMaster;
+
+
+            
+        }
+
+        public void createImportTasks()
+        {
+
+            List<SitesCredentials> sitesCredentials = _onlineMultiTaskMaster.sitesCredentials;
+            String exportTargetPathBase = _onlineMultiTaskMaster.exportTargetPathBase;
+            string exportTargetPath = _onlineMultiTaskMaster.exportTargetPath;
+            bool isSiteAdmin = _onlineMultiTaskMaster.isSiteAdmin ;
+            bool remapContentOwnership = _onlineMultiTaskMaster.remapContentOwnership;
+            int i = 1;
+            foreach (SitesCredentials item in sitesCredentials)
+            {
+                i++;
+                var date = DateTime.Now;
+                string localPathToImport = FileIOHelper.PathDateTimeSubdirectory(exportTargetPathBase, true, "si" + i, date);
+                FileIOHelper.makeCopyToTarget(exportTargetPath, localPathToImport);
+                TaskMaster importTaskMAster;
+                createAsychImportTask(item, isSiteAdmin, localPathToImport, remapContentOwnership, false, out importTaskMAster);
+                _onlineMultiTaskMaster.addoImportTaskMasterList(importTaskMAster);
+            }
+        }
+
+        public static void DelayAction(int millisecond, Action action)
+        {
+            var timer = new System.Timers.Timer(millisecond);
+            timer.Elapsed += delegate
+
+            {
+                action.Invoke();
+                timer.Stop();
+            };
+
+          
+            timer.Start();
+        }
+
+
+        private  void  readImportSiteCredentialsFromFile(string filePath, out List<SitesCredentials> credentialsList,out List<string> siteNameList)
+        {
+           
+           
+            if (!string.IsNullOrWhiteSpace(filePath))
+            {
+                if (!File.Exists(filePath))
+                {
+                    throw new Exception("The path to the Sites credentials file does not exist, " + filePath);
+                }
+            }
+            List<JToken> credentialTokens = getCreantialsObject(filePath);
+            credentialsList = new List<SitesCredentials>();
+            siteNameList = new List<string>();
+            foreach (JToken credentialToken in credentialTokens)
+            {
+                var ct = credentialToken["Site_credentials"].ToObject<SitesCredentials>();
+                var dataSource = credentialToken["data_source"].ToObject<Configuration>();
+                SitesCredentials sitecredentials = new SitesCredentials
+                {
+                    UserName = ct.UserName,
+                    Password = ct.Password,
+                    SiteUrl = ct.SiteUrl,
+                    configuration= dataSource
+
+                };
+                credentialsList.Add(sitecredentials);
+            }
+
+        }
+
+        private TaskMaster CreateAsyncExportTaskForMultiple(String siteUrl,string signInUser,string signInPassword,bool isSiteAdmin,string exportOnlySingleProject,string exportOnlyWithTag,bool showPasswordInUi,out string exportTargetPath)
+        {
+            //----------------------------------------------------------------------
+            //Sanity test the sign in.  If this fails, then there is no point in 
+            //moving forward
+            //----------------------------------------------------------------------
+            bool signInTest = ValidateSignInPossible(siteUrl, signInUser, signInPassword);
+            if (!signInTest)
+            {
+                exportTargetPath = "";
+                return null;
+            }
+
+            var onlineUrls = TableauServerUrls.FromContentUrl(siteUrl, TaskMasterOptions.RestApiReponsePageSizeDefault);
+
+            var nowTime = DateTime.Now;
+            //Local path
+            string localPathForSiteOutput = GeneratePathFromSiteUrl(onlineUrls);
+            localPathForSiteOutput = FileIOHelper.PathDateTimeSubdirectory(localPathForSiteOutput, true, "siteExport", nowTime);
+
+            //Log file
+            string localPathForLogFile =
+                Path.Combine(localPathForSiteOutput, "siteExport_log.txt");
+
+            //Errors file
+            string localPathForErrorsFile =
+                Path.Combine(localPathForSiteOutput, "siteExport_errors.txt");
+
+            //-----------------------------------------------------------------
+            //Generate a command line
+            //-----------------------------------------------------------------
+            string commandLineAsText;
+            CommandLineParser commandLineParsed;
+            CommandLineParser.GenerateCommandLine_SiteExport(
+                showPasswordInUi,
+                localPathForSiteOutput,
+                siteUrl,
+                signInUser,
+                signInPassword,
+                isSiteAdmin,
+                exportOnlySingleProject,
+                exportOnlyWithTag,
+                chkExportRemoveExportTag.Checked,
+                localPathForLogFile,
+                localPathForErrorsFile,
+                chkExportContentsWithKeepAlive.Checked,
+                chkVerboseLog.Checked,
+                chkGenerateDownloadMetadataFiles.Checked,
+                out commandLineAsText,
+                out commandLineParsed);
+
+            //Show the user the command line, so that they can copy/paste and run it
+            txtCommandForExportfromtoMultiple.Text = PathHelper.GetApplicaitonPath() + " " + commandLineAsText;
+
+            //=====================================================================
+            //Create the task
+            //=====================================================================
+            exportTargetPath = localPathForSiteOutput;
+            return TaskMaster.FromCommandLine(commandLineParsed);
+        }
+
+        private void  createAsychImportTask(SitesCredentials siteCredentials,bool isSiteAdmin,string localPathImportFrom,bool remapContentOwnership,bool showPasswordInUi,out TaskMaster taskMaster)
+        {
+            string siteUrl = siteCredentials.SiteUrl;
+            string signInUser = siteCredentials.UserName;
+            string signInPassword = siteCredentials.Password;
+           
+
+            //Check that this contains Workbooks or Data Sources; otherwise it's not a valid path with content
+            if (!TaskMaster.IsValidImportFromDirectory(localPathImportFrom))
+            {
+                throw new Exception("The import directory specified does not contain datasources/workbooks sub directories. Import aborted.");
+            }
+
+            //If there is a DB credentials file path make sure it actually points to a file
+            string pathDBCredentials = GetDBCredentialsImportPath();
+            if (!string.IsNullOrWhiteSpace(pathDBCredentials))
+            {
+                if (!File.Exists(pathDBCredentials))
+                {
+                    throw new Exception("The path to the db credentials file does not exist, " + pathDBCredentials);
+                }
+            }
+
+            //----------------------------------------------------------------------
+            //Sanity test the sign in.  If this fails, then there is no point in 
+            //moving forward
+            //----------------------------------------------------------------------
+            bool signInTest = ValidateSignInPossible(siteUrl, signInUser, signInPassword);
+            if (!signInTest)
+            {
+                taskMaster = null;
+            }
+            else
+            {
+                var onlineUrls = TableauServerUrls.FromContentUrl(siteUrl, TaskMasterOptions.RestApiReponsePageSizeDefault);
+
+                //Local path
+                string localPathForSiteOutput = GeneratePathFromSiteUrl(onlineUrls);
+
+                //Output file
+                var nowTime = DateTime.Now;
+                string localPathForOutputFile =
+                    Path.Combine(localPathForSiteOutput,
+                                 FileIOHelper.FilenameWithDateTimeUnique("siteImport.csv", nowTime));
+
+                //Log file
+                string localPathForLogFile =
+                    Path.Combine(localPathForSiteOutput,
+                                 FileIOHelper.FilenameWithDateTimeUnique("siteImport_log.txt", nowTime));
+
+                //Errors file
+                string localPathForErrorsFile =
+                    Path.Combine(localPathForSiteOutput,
+                                 FileIOHelper.FilenameWithDateTimeUnique("siteImport_errors.txt", nowTime));
+
+                //Manual steps file
+                string localPathForManualStepsFile =
+                    Path.Combine(localPathForSiteOutput,
+                                 FileIOHelper.FilenameWithDateTimeUnique("siteImport_manualSteps.csv", nowTime));
+
+
+                //-----------------------------------------------------------------
+                //Generate a command line
+                //-----------------------------------------------------------------
+                string commandLineAsText;
+                CommandLineParser commandLineParsed;
+                CommandLineParser.GenerateCommandLine_SiteImport(
+                     showPasswordInUi,
+                     localPathImportFrom,
+                     siteUrl,
+                     signInUser,
+                     signInPassword,
+                     isSiteAdmin,
+                     chkRemapWorkbookDataserverReferences.Checked,
+                     pathDBCredentials,
+                     localPathForLogFile,
+                     localPathForErrorsFile,
+                     localPathForManualStepsFile,
+                     remapContentOwnership,
+                     chkVerboseLog.Checked,
+                     out commandLineAsText,
+                     out commandLineParsed);
+
+                //Show the user the command line, so that they can copy/paste and run it
+                //txtSiteImportCommandLineExample.Text = PathHelper.GetApplicaitonPath() + " " + commandLineAsText;
+                //Show the user the command line, so that they can copy/paste and run it
+                //textSiteExportCommandLine.Text = PathHelper.GetApplicaitonPath() + " " + commandLineAsText;
+                //=====================================================================
+                //Create the task
+                //=====================================================================
+                var task = TaskMaster.FromCommandLine(commandLineParsed);
+                task.siteCredentials = siteCredentials;
+                taskMaster = task;
+            }
+
+        }
+
+        private void makeCopyToDestFile(string sourcePath, string targetPath)
+        {
+            string fileName = "test.txt";
+            
+
+            // Use Path class to manipulate file and directory paths.
+            string sourceFile = System.IO.Path.Combine(sourcePath, fileName);
+            string destFile = System.IO.Path.Combine(targetPath, fileName);
+
+            // To copy a folder's contents to a new location:
+            // Create a new target folder, if necessary.
+            if (!System.IO.Directory.Exists(targetPath))
+            {
+                System.IO.Directory.CreateDirectory(targetPath);
+            }
+
+            // To copy a file to another location and 
+            // overwrite the destination file if it already exists.
+            System.IO.File.Copy(sourceFile, destFile, true);
+
+            // To copy all the files in one directory to another directory.
+            // Get the files in the source folder. (To recursively iterate through
+            // all subfolders under the current directory, see
+            // "How to: Iterate Through a Directory Tree.")
+            // Note: Check for target path was performed previously
+            //       in this code example.
+            if (System.IO.Directory.Exists(sourcePath))
+            {
+                string[] files = System.IO.Directory.GetFiles(sourcePath);
+
+                // Copy the files and overwrite destination files if they already exist.
+                foreach (string s in files)
+                {
+                    // Use static Path methods to extract only the file name from the path.
+                    fileName = System.IO.Path.GetFileName(s);
+                    destFile = System.IO.Path.Combine(targetPath, fileName);
+                    System.IO.File.Copy(s, destFile, true);
+                }
+            }
+            else
+            {
+                Console.WriteLine("Source path does not exist!");
+            }
         }
     }
 }

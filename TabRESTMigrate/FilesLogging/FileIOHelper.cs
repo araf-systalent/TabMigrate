@@ -183,4 +183,23 @@ static class FileIOHelper
         return pathWithProject;
     }
 
+    public static void makeCopyToTarget(string sourcePath, string targetPath)
+    {
+        String[] Files;
+
+        if (targetPath[targetPath.Length - 1] != Path.DirectorySeparatorChar)
+            targetPath += Path.DirectorySeparatorChar;
+        if (!Directory.Exists(targetPath)) Directory.CreateDirectory(targetPath);
+        Files = Directory.GetFileSystemEntries(sourcePath);
+        foreach (string Element in Files)
+        {
+            // Sub directories
+            if (Directory.Exists(Element))
+                makeCopyToTarget(Element, targetPath + Path.GetFileName(Element));
+            // Files in directory
+            else
+                File.Copy(Element, targetPath + Path.GetFileName(Element), true);
+        }
+    }
+
 }

@@ -9,7 +9,7 @@ using System.Text;
 class TableauServerWebClient : WebClient
 {
     public readonly int WebRequestTimeout;
-    public const int DefaultLongRequestTimeOutMs = 15 * 60 * 1000;  //15 minutes * 60 sec/minute * 1000 ms/sec
+    public const int DefaultLongRequestTimeOutMs = 20 * 60 * 1000;  //15 minutes * 60 sec/minute * 1000 ms/sec
 
     /// <summary>
     /// Constructor
